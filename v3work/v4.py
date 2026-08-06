@@ -677,7 +677,7 @@ def find_land_orders(state, money, days_left):
 
 def assign_workers(state, tasks):
     if not tasks:
-        return [[] for _ in state.all_workers]
+        return [None for _ in state.all_workers]
 
     workers = state.all_workers
     assignments = [None] * len(workers)
