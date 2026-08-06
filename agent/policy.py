@@ -1,29 +1,32 @@
 """
-Kaggriculture agent v0.
+Kaggriculture agent v1.
 
-Design (see notes/DESIGN.md for the full reasoning trail):
-  - Every turn, build a list of candidate TASKS (things a worker could do:
-    water a dying plant, harvest a ready tile, plant a new seed, etc.)
-  - Score each task by estimated $ value, with harsh penalties for letting
-    something die and near-zero score for anything that can't pay off
-    before the season ends (terminal liquidation awareness).
-  - Greedily assign workers to their best reachable task, one worker per
-    task (prevents two workers colliding on the same PLANT command).
-  - Market orders (sell/buy) are queued separately each turn using
-    unit-by-unit price simulation so we don't crash our own prices.
+Builds on v0 (see git history / notes/DESIGN.md for that reasoning trail).
+v1 closes three gaps v0 never touched at all:
+  1. HIRE - v0 never hired a farm hand, leaving worker-throughput on the
+     table whenever there was more work than one farmer could do in a day.
+  2. BUY_LAND - v0 never expanded land, even when the starting quadrant
+     was fully utilized and capital was sitting idle.
+  3. Animal investment - v0 could feed/harvest an animal if one existed,
+     but never actually built a coop/pasture, bought an animal, carried it
+     from the shed, and placed it. That's a real 4-step pipeline
+     (BUILD -> BUY_ANIMAL -> PICKUP -> PLACE), implemented here as a
+     state machine re-derived from the observation every turn (the agent
+     itself is stateless between turns, by design - Kaggle calls agent(obs)
+     fresh each turn with no persistent memory).
 
-This is NOT multi-day lookahead or opponent modeling — that's v2. This is
-the "correct, non-negligent, exploits obvious ROI differences" baseline.
+Still NOT doing: multi-day lookahead, opponent modeling. Task values below
+are still single-step estimates, just no longer blind to entire action
+categories the way v0's were.
 """
 from . import constants as C
 from . import market as M
 
 MOVES = {"NORTH": (0, -1), "SOUTH": (0, 1), "EAST": (1, 0), "WEST": (-1, 0)}
-
-# Below this many remaining turns, stop starting anything that can't cash
-# out in time. Computed per-candidate against days_left, not just a flat
-# number, but this is the hard backstop.
 SAFETY_MARGIN_TURNS = 6
+MAX_ANIMALS_V1 = 4           # cap ambition for v1 - avoid overcommitting to a
+                              # pipeline we haven't proven yet on a real ladder
+ANIMAL_PRIORITY = ["GOOSE", "COW", "SHEEP"]  # cheap entry first, then better payback
 
 
 def _dist(a, b):
@@ -31,12 +34,9 @@ def _dist(a, b):
 
 
 def _step_toward(pos, target):
-    dx = target[0] - pos[0]
-    dy = target[1] - pos[1]
+    dx, dy = target[0] - pos[0], target[1] - pos[1]
     if dx == 0 and dy == 0:
         return "PASS"
-    # Move along the axis with the larger gap first (irrelevant for cost
-    # since it's Manhattan distance either way, but keeps behavior stable).
     if abs(dx) >= abs(dy) and dx != 0:
         return "EAST" if dx > 0 else "WEST"
     return "SOUTH" if dy > 0 else "NORTH"
@@ -50,22 +50,16 @@ def _days_left(day):
     return C.SEASON_DAYS - day
 
 
-def _quadrant_of(x, y, board_size):
-    half = board_size // 2
-    if x < half and y < half: return "NW"
-    if x >= half and y < half: return "NE"
-    if x < half and y >= half: return "SW"
-    return "SE"
-
-
 def _worker_positions(farm):
-    positions = [tuple(farm["farmer"])]
-    positions += [tuple(h) for h in farm.get("hands", [])]
-    return positions
+    return [tuple(farm["farmer"])] + [tuple(h) for h in farm.get("hands", [])]
 
 
-def _find_survival_tasks(farm, board_size):
-    """Anything that dies tonight if ignored. Highest priority, always."""
+def _shed_adjacent_tile(board_size):
+    half = board_size // 2
+    return (half - 1, half - 1)  # always valid: NW quadrant is always unlocked
+
+
+def _find_survival_tasks(farm):
     tasks = []
     for y, row in enumerate(farm["tiles"]):
         for x, tile in enumerate(row):
@@ -84,28 +78,16 @@ def _find_harvest_tasks(farm):
     tasks = []
     for y, row in enumerate(farm["tiles"]):
         for x, tile in enumerate(row):
-            if not isinstance(tile, dict):
+            if not isinstance(tile, dict) or tile.get("yield_units", 0) <= 0:
                 continue
-            if tile.get("yield_units", 0) > 0:
-                # Rough value: units * a conservative product base price.
-                # (Real revenue is computed properly at sell time via market.py;
-                # this is only used to rank harvest vs other tasks.)
-                if tile["kind"] == "PLANT":
-                    item = tile["crop"]
-                else:
-                    item = C.ANIMALS[tile["animal"]]["product"]
-                est_price = C.MARKET_PARAMS[item]["base"]
-                tasks.append({
-                    "pos": (x, y), "action": "HARVEST",
-                    "value": tile["yield_units"] * est_price * 0.9,
-                    "kind": "harvest",
-                })
+            item = tile["crop"] if tile["kind"] == "PLANT" else C.ANIMALS[tile["animal"]]["product"]
+            est_price = C.MARKET_PARAMS[item]["base"]
+            tasks.append({"pos": (x, y), "action": "HARVEST",
+                           "value": tile["yield_units"] * est_price * 0.9, "kind": "harvest"})
     return tasks
 
 
 def _find_water_tasks(farm):
-    """Plants not yet dying but unwatered today — worth doing if nothing
-    more urgent, since watering during the bonus window adds yield."""
     tasks = []
     for y, row in enumerate(farm["tiles"]):
         for x, tile in enumerate(row):
@@ -124,21 +106,12 @@ def _find_care_tasks(farm):
     return tasks
 
 
-def _best_crop_to_plant(money, days_left, turns_left):
-    """ROI-ranked crop choice, filtered by whether it can pay off before
-    season end (terminal liquidation awareness)."""
+def _best_crop_to_plant(money, days_left):
     candidates = []
     for crop, cd in C.CROPS.items():
-        if cd["seed"] > money:
-            continue
-        # A crop needs first_yield_day days to pay anything, plus ~1 day
-        # margin to travel+harvest+sell. If that doesn't fit, skip it.
-        if days_left < cd["first_yield_day"] + 1:
+        if cd["seed"] > money or days_left < cd["first_yield_day"] + 1:
             continue
         est_price = C.MARKET_PARAMS[crop]["base"]
-        # crude total value estimate: max_yield * price, discounted if it's
-        # an ongoing crop that likely won't reach full scheduled yields
-        # given remaining days.
         value = cd["max_yield"] * est_price
         payoff_days = max(cd["max_yield_day"], cd["first_yield_day"])
         roi_per_day = (value - cd["seed"]) / max(1, payoff_days)
@@ -149,13 +122,61 @@ def _best_crop_to_plant(money, days_left, turns_left):
     return candidates[0][1]
 
 
-def _find_empty_tiles(farm, board_size):
-    empties = []
+def _find_empty_tiles(farm):
+    return [(x, y) for y, row in enumerate(farm["tiles"]) for x, t in enumerate(row) if t is None]
+
+
+def _animal_structure_state(farm):
+    """Returns (counts_by_animal, empty_coop_pos, empty_pasture_pos)."""
+    counts = {"GOOSE": 0, "COW": 0, "SHEEP": 0}
+    empty_coop, empty_pasture = None, None
     for y, row in enumerate(farm["tiles"]):
         for x, tile in enumerate(row):
-            if tile is None:
-                empties.append((x, y))
-    return empties
+            if not isinstance(tile, dict):
+                continue
+            if tile.get("kind") == "COOP":
+                if tile.get("animal"):
+                    counts["GOOSE"] += 1
+                elif empty_coop is None:
+                    empty_coop = (x, y)
+            elif tile.get("kind") == "PASTURE":
+                if tile.get("animal"):
+                    counts[tile["animal"]] += 1
+                elif empty_pasture is None:
+                    empty_pasture = (x, y)
+    return counts, empty_coop, empty_pasture
+
+
+def _decide_animal_target(farm, money, days_left):
+    counts, empty_coop, empty_pasture = _animal_structure_state(farm)
+    total = sum(counts.values())
+    if total >= MAX_ANIMALS_V1 or days_left < 6:
+        return None, empty_coop, empty_pasture
+    for animal in ANIMAL_PRIORITY:
+        cd = C.ANIMALS[animal]
+        if counts[animal] == 0 and money >= cd["cost"] + 100:
+            return animal, empty_coop, empty_pasture
+    if money >= C.ANIMALS["GOOSE"]["cost"] + 200:
+        return "GOOSE", empty_coop, empty_pasture
+    return None, empty_coop, empty_pasture
+
+
+def _consider_buy_land(farm, money, days_left):
+    unlocked = farm.get("unlocked_quadrants", ["NW"])
+    n_extra = len(unlocked) - 1
+    if n_extra >= len(C.LAND_ORDER) or days_left < 8:
+        return False
+    price = C.LAND_PRICES[n_extra]
+    if money < price + 500:
+        return False
+    total_unlocked = occupied = 0
+    for row in farm["tiles"]:
+        for tile in row:
+            if tile != "LOCKED":
+                total_unlocked += 1
+                if tile is not None:
+                    occupied += 1
+    return total_unlocked > 0 and (occupied / total_unlocked) > 0.75
 
 
 def agent(obs):
@@ -174,80 +195,116 @@ def agent(obs):
     money = farm["money"]
     shed = private.get("shed", {})
     seeds = private.get("seeds", {})
+    inventories = private.get("inventories", [])
     m_inv = market.get("inventory", {})
     m_params = market.get("params")
 
     turns_left = _turns_left(day, hour)
     days_left = _days_left(day)
-    in_liquidation = turns_left <= SAFETY_MARGIN_TURNS * 4  # last ~1 day: stop investing
+    in_liquidation = turns_left <= SAFETY_MARGIN_TURNS * 4
 
-    # ---------- MARKET ORDERS (sell shed inventory, price-aware) ----------
     market_orders = []
     orders_used = 0
     max_orders = 10
+
+    # ---------- SELL shed inventory, price-aware ----------
     for item, qty in shed.items():
-        if qty <= 0 or orders_used >= max_orders:
-            continue
+        if qty <= 0 or orders_used >= max_orders or item in ("GOOSE", "COW", "SHEEP"):
+            continue  # animals waiting in shed to be placed are not for sale
         inv = m_inv.get(item, C.MARKET_I0)
         cur_price = C.market_price(item, inv, m_params)
-        # Don't crash the price selling our own batch: stop once marginal
-        # price drops below 60% of the pre-sale price (tunable), UNLESS
-        # we're in end-game liquidation, where anything above the floor
-        # is worth taking since unsold stock is worth exactly $0 at turn 720.
         floor = C.PRICE_FLOOR if in_liquidation else max(C.PRICE_FLOOR, int(cur_price * 0.6))
         sell_qty, _ = M.best_sell_batch(item, qty, inv, m_params, min_marginal_price=floor)
         if sell_qty > 0:
             market_orders.append(["SELL", item, sell_qty])
             orders_used += 1
 
-    # Buy seed for next planting decision (decided below) happens after we
-    # know what workers will need; kept simple here — see planting task.
-
     # ---------- BUILD TASK LIST ----------
-    tasks = _find_survival_tasks(farm, board_size)
+    tasks = _find_survival_tasks(farm)
     tasks += _find_harvest_tasks(farm)
     tasks += _find_care_tasks(farm)
     if not in_liquidation:
         tasks += _find_water_tasks(farm)
 
-    # Planting: only propose if not in liquidation and there's an empty tile
-    # and we can afford + have runway to profit.
+    # ---- Planting ----
     if not in_liquidation:
-        crop = _best_crop_to_plant(money, days_left, turns_left)
-        empties = _find_empty_tiles(farm, board_size)
+        crop = _best_crop_to_plant(money, days_left)
+        empties = _find_empty_tiles(farm)
         if crop and empties:
             need_seed = seeds.get(crop, 0) <= 0
             if need_seed and money >= C.CROPS[crop]["seed"] and orders_used < max_orders:
                 market_orders.append(["BUY_SEED", crop, 1])
                 orders_used += 1
             if seeds.get(crop, 0) > 0 or need_seed:
-                # Plant on the nearest empty tile (task list picks nearest worker anyway)
                 tasks.append({"pos": empties[0], "action": "PLANT", "crop": crop,
-                               "value": 40, "kind": "plant"})
+                               "value": 45, "kind": "plant"})
 
-    # ---------- ASSIGN WORKERS TO TASKS (greedy, nearest-highest-value) --
+    # ---- Animal investment pipeline (v1 addition) ----
+    if not in_liquidation:
+        target_animal, empty_coop, empty_pasture = _decide_animal_target(farm, money, days_left)
+        if target_animal:
+            structure = C.ANIMALS[target_animal]["structure"]
+            empty_structure = empty_coop if structure == "COOP" else empty_pasture
+            if empty_structure is None:
+                empties = _find_empty_tiles(farm)
+                if empties:
+                    op = "BUILD_COOP" if structure == "COOP" else "BUILD_PASTURE"
+                    tasks.append({"pos": empties[0], "action": op, "value": 60, "kind": "build"})
+            else:
+                shed_qty = shed.get(target_animal, 0)
+                carrying_worker = None
+                for wi, winv in enumerate(inventories):
+                    if isinstance(winv, dict) and winv.get(target_animal, 0) > 0:
+                        carrying_worker = wi
+                        break
+                if carrying_worker is not None:
+                    tasks.append({"pos": empty_structure, "action": "PLACE", "item": target_animal,
+                                   "value": 80, "kind": "place", "restrict_worker": carrying_worker})
+                elif shed_qty > 0:
+                    tasks.append({"pos": _shed_adjacent_tile(board_size), "action": "PICKUP",
+                                   "item": target_animal, "value": 70, "kind": "pickup"})
+                elif money >= C.ANIMALS[target_animal]["cost"] and orders_used < max_orders:
+                    market_orders.append(["BUY_ANIMAL", target_animal, 1])
+                    orders_used += 1
+
+    # ---- Land expansion (v1 addition) ----
+    if not in_liquidation and orders_used < max_orders and _consider_buy_land(farm, money, days_left):
+        market_orders.append(["BUY_LAND"])
+        orders_used += 1
+
+    # ---------- ASSIGN WORKERS TO TASKS ----------
     workers = _worker_positions(farm)
     assigned = [None] * len(workers)
     used_tasks = set()
 
-    # Sort tasks by value desc so high-value tasks get first pick of nearest worker
     tasks.sort(key=lambda t: -t["value"])
     for t in tasks:
-        tkey = t["pos"]
+        tkey = (t["pos"], t.get("action"))
         if tkey in used_tasks:
             continue
-        # find nearest unassigned worker
+        restrict = t.get("restrict_worker")
+        candidate_indices = [restrict] if restrict is not None else range(len(workers))
         best_w, best_d = None, None
-        for wi, wpos in enumerate(workers):
-            if assigned[wi] is not None:
+        for wi in candidate_indices:
+            if wi >= len(workers) or assigned[wi] is not None:
                 continue
-            d = _dist(wpos, t["pos"])
+            d = _dist(workers[wi], t["pos"])
             if best_d is None or d < best_d:
                 best_w, best_d = wi, d
         if best_w is None:
-            break
+            continue
         assigned[best_w] = t
         used_tasks.add(tkey)
+
+    # ---- HIRE decision (v1 addition): only once we've seen we can't cover
+    # today's backlog with current workers, and only if it pays for itself
+    # in the runway remaining.
+    uncovered = sum(1 for t in tasks if (t["pos"], t.get("action")) not in used_tasks)
+    if not in_liquidation and days_left >= 3 and uncovered > 0 and len(workers) < 4:
+        hire_cost = C.fib_cost(farm.get("hires_today", 0) + 1)
+        if money >= hire_cost + 200 and orders_used < max_orders:
+            market_orders.append(["HIRE"])
+            orders_used += 1
 
     # ---------- CONVERT ASSIGNMENTS TO ACTIONS ----------
     def action_for(wi):
@@ -259,6 +316,8 @@ def agent(obs):
             return [_step_toward(wpos, t["pos"])]
         if t["action"] == "PLANT":
             return ["PLANT", t["crop"]]
+        if t["action"] in ("PLACE", "PICKUP"):
+            return [t["action"], t["item"]]
         return [t["action"]]
 
     farmer_action = action_for(0)
