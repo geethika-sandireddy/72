@@ -1,0 +1,12 @@
+const HORIZONS={5:{lightning:48,storm:37},15:{lightning:61,storm:52},30:{lightning:71,storm:71},60:{lightning:58,storm:63},180:{lightning:33,storm:41}};
+let selectedHorizon=30;
+const $=s=>document.querySelector(s); const $$=s=>document.querySelectorAll(s);
+function toast(message){const el=$("#toast");el.textContent=message;el.classList.add("show");setTimeout(()=>el.classList.remove("show"),2600)}
+function updateHorizon(h){selectedHorizon=Number(h);const d=HORIZONS[selectedHorizon];$("#cellLightning").textContent=d.lightning+"%";$("#cellStorm").textContent=d.storm+"%";$("#lightningBar").style.width=d.lightning+"%";$("#stormBar").style.width=d.storm+"%";$("#peakLightning").textContent=Math.max(...Object.values(HORIZONS).map(x=>x.lightning))+"%";$$('[data-horizon]').forEach(b=>b.classList.toggle("selected",Number(b.dataset.horizon)===selectedHorizon));toast(`Forecast horizon advanced to +${h} minutes`)}
+function updateClock(){const d=new Date();$("#clock").textContent=d.toISOString().slice(11,19)+" UTC";$("#lastUpdate").textContent="just now"}setInterval(updateClock,1000);updateClock();
+$$('[data-horizon]').forEach(b=>b.addEventListener('click',()=>updateHorizon(b.dataset.horizon)));
+$$('.storm-marker').forEach(m=>m.addEventListener('click',()=>{$$('.storm-marker').forEach(x=>x.classList.remove('selected'));m.classList.add('selected');$("#selectedCell").innerHTML=m.dataset.cell+' <span class="severity '+(m.dataset.cell==='C-1042'?'high':'')+'">'+(m.dataset.cell==='C-1042'?'HIGH':'MOD')+'</span>';toast(`${m.dataset.cell} selected · inspector updated`)}));
+$$('.tool').forEach(b=>b.addEventListener('click',()=>{$$('.tool').forEach(x=>x.classList.remove('active'));b.classList.add('active');$("#fieldLabel").textContent=b.textContent.toUpperCase();toast(`${b.textContent} layer selected`)}));
+$$('.nav-item,[data-view]').forEach(b=>b.addEventListener('click',()=>{const view=b.dataset.view;if(view){toast(view==='operations'?'Operations workspace active':view==='replay'?'Replay lab is ready for authorized cases':'Evidence log opened')}}));
+$("#refreshBtn").addEventListener('click',()=>{updateClock();toast('Forecast workspace refreshed')});
+[["#approveBtn","Draft recorded for forecaster approval"],["#editBtn","Draft moved to edit / hold"],["#dismissBtn","Draft dismissed locally"]].forEach(([id,msg])=>$(id).addEventListener('click',()=>{toast(msg);$(".review-state").textContent=id==="#approveBtn"?'PENDING':id==="#editBtn"?'EDIT / HOLD':'DISMISSED'}))
