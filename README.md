@@ -1,73 +1,39 @@
-# SIH 2026 PS 26072 — Thunderstorm & Lightning Nowcasting Prototype
+# SIH 2026 PS 26072 — INDRA prototype
 
-This repository contains a fast prototype for an India-focused thunderstorm and lightning nowcasting system aligned to SIH 2026 PS 26072 (MoES/IMD, Disaster Management theme).
+INDRA is a provenance-first, sensor-disagreement-aware prototype for 0–3 hour thunderstorm and lightning nowcasting over India.
 
-The implementation is intentionally scoped to a credible, testable prototype that can be executed in a short time window while still covering the required architecture and evaluation logic.
-
-## Scope covered
-
-- Core LAD (Leaky Accumulate-Discharge) cell with inspectable state
-- Separate storm-cell tracking module
-- Multi-horizon lightning/thunderstorm forecast heads at 5, 15, 30, 60, and 180 minutes
-- Provenance tagging for every record: LIVE / REPLAY:<case-study> / SYNTHETIC
-- Rare-event verification metrics: POD, FAR, CSI/ETS, Brier score, lead-time skill curve
-- Leakage-safe train/test split logic
-- Serving API and optional dashboard
-- Synthetic fallback for lightning live-feed when ILLN bulk API is unavailable
-
-## Required data sources
-
-- NWP: NOAA GFS / ECMWF ERA5 (open, real data from day one)
-- Satellite + radar: MOSDAC / ISRO SAC catalog (insights and registration path documented)
-- Lightning climatology: WWLLN Global Lightning Climatology (open)
-- Live lightning: India ILLN (bulk access may be unavailable; synthetic fallback is labeled SYNTHETIC)
-
-## Repository structure
-
-- `app/provenance.py` — provenance enums and record tagging
-- `app/storm_cells.py` — connected-component tracker and per-cell features
-- `app/lad_model.py` — LAD module and forecast head
-- `app/metrics.py` — deterministic verification metrics and leakage checks
-- `app/ingestion.py` — ingestion interfaces, multi-source data model, synthetic live lightning generator
-- `app/service.py` — FastAPI serving layer with latency logging
-- `app/dashboard.py` — streamlit dashboard, built after verification logic is working
-
-## Quick start
+## Run
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
-python -m app.service
+uvicorn app.service:app --reload
+# second terminal:
+streamlit run app/dashboard.py
 ```
 
-Then visit:
+API docs: http://127.0.0.1:8000/docs
 
-- API: `http://localhost:8000/docs`
-- Dashboard: `streamlit run app/dashboard.py`
+The default dashboard scenario is explicitly `SYNTHETIC`. `LIVE` mode rejects missing normalized sensor payloads rather than inventing observations. Real MOSDAC, GFS/ERA5, WWLLN/WGLC and ILLN adapters must be populated with authenticated/downloaded data before operational use.
 
-## Operational notes
+## Scientific and engineering contract
 
-- No synthetic data is ever presented as real.
-- The dashboard is intentionally written after the verification and serving logic.
-- The prototype emphasizes interpretable, plottable storm state variables rather than opaque black-box predictions.
-- Performance checks avoid temporal leakage by ensuring no case appears in both train and test splits.
+- Separate connected-component storm-cell detection/tracking output and separate lightning/thunderstorm probabilities.
+- LAD state is inspectable: `P_t = gamma P_(t-1) + f_theta(x_t)`, followed by flash discharge `P_t <- P_t(1-rho)`; `gamma` and `rho` are bounded by the PS.
+- Learned MLP fusion heads produce distinct 5/15/30/60/180-minute probabilities. The bundled checkpoint is deterministic synthetic calibration, clearly reported as such—not a real-data score.
+- Radar, satellite, lightning, and NWP are explicit normalized source contracts. No multi-radar fusion is claimed unless records from both radar sources are supplied.
+- Confidence intervals widen as sensor agreement falls; the UI exposes health and provenance per source.
+- Verification must be run on held-out storm cases using POD, FAR, CSI, ETS, Brier and per-horizon curves. Plain accuracy is intentionally absent.
+- `train_demo.py` is only a smoke test. Do not report its output as operational skill.
 
-## PS coverage summary
+## Data truthfulness
 
-This prototype is designed to satisfy the explicit PS clauses:
+Every record and UI view carries `LIVE`, `REPLAY:<case-study>`, or `SYNTHETIC`. ILLN is not assumed to have a public bulk API. A synthetic fallback is allowed only when labelled SYNTHETIC everywhere. This repository does not claim 100% accuracy; atmospheric forecasts are probabilistic and must be validated against real held-out cases.
 
-- AIML-based nowcasting system
-- Nowcasting horizon 5–180 minutes
-- Separate thunderstorm and lightning output
-- Multi-radar + satellite + lightning + NWP ingestion
-- Inspectable LAD cell state `P_t`
-- Storm-cell identification/tracking output as a separate deliverable
-- Provenance tagging everywhere
-- Rare-event verification metrics
-- API + dashboard serving architecture
-- Extra options included: action text, explainability panel, confidence intervals, replay tool
+## Judge demo story
 
-## Important caveat
-
-This is a prototype, not a production operational forecasting system. It is designed to be credible, reproducible, and demonstrable within a short development window with real data hooks and explicit synthetic fallback labeling.
+1. Show a synthetic replay with cell track, separate hazards, LAD pressure, confidence intervals and sensor provenance.
+2. Disable/delay a source in a real adapter payload and show uncertainty widening.
+3. Show the verification report from case-separated replay data; never use inference-time synthetic labels as evaluation evidence.
+4. Position the district schema alongside IMD's existing product, not as a replacement.

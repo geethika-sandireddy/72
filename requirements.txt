@@ -1,1 +1,2 @@
-scipy>=1.13.0
+# Add scipy and requests to the existing requirements
+requests>=2.32.0
