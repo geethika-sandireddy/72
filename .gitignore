@@ -1,0 +1,19 @@
+# Python virtual environments
+.venv/
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+
+# Notebook artifacts
+.ipynb_checkpoints/
+
+# Data caches
+.cache/
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
