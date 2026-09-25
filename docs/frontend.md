@@ -1,18 +1,12 @@
-# Frontend / operator-console notes
+# Earth Operations UI
 
-The Streamlit console is intentionally map-first and original. It is inspired by operational weather-console information architecture, not copied from any external repository.
+The dashboard is an original operational weather-console interface inspired by the information architecture of professional nowcasting products.
 
-Implemented in `app/dashboard.py`:
+Run:
 
-- Mission header and mode/provenance ribbon
-- Full primary hazard workspace with selectable forecast horizon
-- Storm-cell panel with intensity, area, movement and growth
-- LAD state panel
-- Multi-horizon timeline
-- Source-health/evidence view
-- Risk and NDMA action view
-- Human reviewer workflow: approve, edit/hold, dismiss
-- Explicit synthetic/replay/live gating
-- Honest labels for grid fallback, uncalibrated uncertainty and missing geographic infrastructure data
+```bash
+uvicorn app.service:app --reload
+streamlit run app/dashboard.py
+```
 
-The current backend provides a raster/grid fallback for synthetic mode, not georeferenced map tiles or real replay payloads. The UI therefore does not pretend the grid is a geographic map. Once `GridObservation` payloads with coordinates and authorized replay/live adapters are connected, the same workspace can render geographic layers.
+The synthetic view provides an India-centered illustrative Earth projection and a globe toggle. It is explicitly labelled synthetic and does not claim real geolocation. Once `GridObservation` payloads contain authorized georeferenced radar/satellite/NWP data and lightning events, replace the demo coordinate projection with true geographic layers.
