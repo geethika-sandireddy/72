@@ -1,0 +1,2 @@
+# Registered replay cases are created locally only after authorized data access.
+# Copy metadata.json templates here; do not commit restricted raw meteorological data.
