@@ -1,4 +1,2 @@
-# Experimental replay layout
-# Real files must be supplied through authorized IMD/MOSDAC/IITM/NWP access.
-data/
-results/
+# External datasets are downloaded locally, never committed by default.
+data/external/
