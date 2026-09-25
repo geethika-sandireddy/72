@@ -1,19 +1,4 @@
-# Python virtual environments
-.venv/
-__pycache__/
-*.pyc
-
-# OS files
-.DS_Store
-
-# Notebook artifacts
-.ipynb_checkpoints/
-
-# Data caches
-.cache/
-*.sqlite3
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Experimental replay layout
+# Real files must be supplied through authorized IMD/MOSDAC/IITM/NWP access.
+data/
+results/
