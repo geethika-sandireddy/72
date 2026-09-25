@@ -1,86 +1,29 @@
-"""Verification metrics for rare-event thunderstorm and lightning forecasting."""
-from __future__ import annotations
+"""Leakage-safe rare-event verification. No accuracy metric is exposed."""
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, Mapping, Sequence, Tuple
 import numpy as np
 
-
-def _safe_div(num: float, den: float) -> float:
-    return 0.0 if den == 0 else float(num / den)
-
-
+def div(a, b): return float(a / b) if b else 0.0
 @dataclass
 class VerificationResult:
-    pod: float
-    far: float
-    csi: float
-    ets: float
-    brier_score: float
-    lead_time_skill: Dict[int, float]
-    n_cases: int
-    leakage_ok: bool
-    summary: str
-
-
+    pod: float; far: float; csi: float; ets: float; brier_score: float
+    lead_time_skill: Dict[int, float]; n_samples: int; n_cases: int; leakage_ok: bool
+    provenance: str; baseline_brier: float | None = None
+    def as_dict(self): return asdict(self)
 class VerificationModule:
-    """Rare-event metrics with hazard-aware scoring and no temporal leakage detection."""
-    def __init__(self, horizons: Tuple[int, ...] = (5, 15, 30, 60, 180)):
-        self.horizons = horizons
-
+    HORIZONS = (5, 15, 30, 60, 180)
     @staticmethod
-    def _confusion_counts(y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> Tuple[int, int, int, int]:
-        y_hat = (y_prob >= threshold).astype(int)
-        y_true = y_true.astype(int)
-        tp = int(np.sum((y_true == 1) & (y_hat == 1)))
-        fp = int(np.sum((y_true == 0) & (y_hat == 1)))
-        fn = int(np.sum((y_true == 1) & (y_hat == 0)))
-        tn = int(np.sum((y_true == 0) & (y_hat == 0)))
-        return tp, fp, fn, tn
-
-    def pod(self, y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> float:
-        tp, fp, fn, _ = self._confusion_counts(y_true, y_prob, threshold)
-        return _safe_div(tp, tp + fn)
-
-    def far(self, y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> float:
-        tp, fp, fn, _ = self._confusion_counts(y_true, y_prob, threshold)
-        return _safe_div(fp, tp + fp)
-
-    def csi(self, y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> float:
-        tp, fp, fn, _ = self._confusion_counts(y_true, y_prob, threshold)
-        return _safe_div(tp, tp + fp + fn)
-
-    def ets(self, y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> float:
-        tp, fp, fn, tn = self._confusion_counts(y_true, y_prob, threshold)
-        random_hits = (np.sum(y_true == 1) * np.sum((y_prob >= threshold))) / len(y_true)
-        return _safe_div(tp - random_hits, tp + fp + fn - random_hits)
-
-    def brier_score(self, y_true: np.ndarray, y_prob: np.ndarray) -> float:
-        return float(np.mean((np.asarray(y_prob) - np.asarray(y_true)) ** 2))
-
-    def lead_time_skill_curve(self, y_true: List[np.ndarray], y_prob: List[np.ndarray]) -> Dict[int, float]:
-        result = {}
-        for idx, horizon in enumerate(self.horizons):
-            if idx < len(y_true):
-                brier = self.brier_score(y_true[idx], y_prob[idx])
-                result[horizon] = float(brier)
-            else:
-                result[horizon] = 1.0
-        return result
-
-    def check_leakage(self, case_ids: List[str]) -> bool:
-        return len(case_ids) == len(set(case_ids))
-
-    def evaluate(self, y_true: np.ndarray, y_prob: np.ndarray, case_ids: List[str] | None = None) -> VerificationResult:
-        leakage_ok = self.check_leakage(case_ids or [])
-        metrics = VerificationResult(
-            pod=self.pod(y_true, y_prob),
-            far=self.far(y_true, y_prob),
-            csi=self.csi(y_true, y_prob),
-            ets=self.ets(y_true, y_prob),
-            brier_score=self.brier_score(y_true, y_prob),
-            lead_time_skill={h: self.brier_score(y_true, y_prob) for h in self.horizons},
-            n_cases=int(len(y_true)),
-            leakage_ok=leakage_ok,
-            summary="No plain accuracy; rare-event metrics used for verification."
-        )
-        return metrics
+    def split_case_ids(case_ids: Sequence[str], test_fraction=.2) -> Tuple[np.ndarray, np.ndarray]:
+        unique = np.array(sorted(set(case_ids))); cut = max(1, int(len(unique)*(1-test_fraction)))
+        train = set(unique[:cut]); return np.array([c in train for c in case_ids]), np.array([c not in train for c in case_ids])
+    @staticmethod
+    def leakage_check(train_cases: Iterable[str], test_cases: Iterable[str]) -> bool:
+        return not (set(train_cases) & set(test_cases))
+    @staticmethod
+    def evaluate(y_true, y_prob, case_ids, horizon_probabilities: Mapping[int, Sequence[float]] | None = None, provenance="REPLAY:unknown", baseline_prob=None):
+        y = np.asarray(y_true, int); p = np.asarray(y_prob, float); pred = p >= .5
+        tp, fp, fn = np.sum((y==1)&pred), np.sum((y==0)&pred), np.sum((y==1)&(~pred)); n = len(y)
+        random_hits = (np.sum(y==1)*np.sum(pred)/max(n,1)); ets_den = tp+fp+fn-random_hits
+        curve = {h: float(np.mean((np.asarray(v)-y)**2)) for h,v in (horizon_probabilities or {5:p}).items()}
+        for h in VerificationModule.HORIZONS: curve.setdefault(h, float("nan"))
+        return VerificationResult(div(tp,tp+fn), div(fp,tp+fp), div(tp,tp+fp+fn), div(tp-random_hits,ets_den), float(np.mean((p-y)**2)), curve, n, len(set(case_ids)), VerificationModule.leakage_check(case_ids, []), provenance, None if baseline_prob is None else float(np.mean((np.asarray(baseline_prob)-y)**2)))
