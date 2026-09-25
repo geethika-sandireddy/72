@@ -1,0 +1,25 @@
+{
+  "case_id": "replace-with-authorized-case-id",
+  "provenance": "REPLAY:replace-with-authorized-case-id",
+  "description": "Authorized historical thunderstorm case",
+  "sources": [
+    "IMD_DWR_RADAR_1",
+    "IMD_DWR_RADAR_2",
+    "MOSDAC_INSAT",
+    "IITM_ILLN",
+    "ERA5_OR_OPERATIONAL_NWP"
+  ],
+  "domain": {
+    "lat_min": 15.0,
+    "lat_max": 20.0,
+    "lon_min": 75.0,
+    "lon_max": 80.0,
+    "crs": "EPSG:4326",
+    "resolution_km": 1.0
+  },
+  "master_cadence_minutes": 15,
+  "observation_start_utc": "2025-01-01T00:00:00Z",
+  "observation_end_utc": "2025-01-01T06:00:00Z",
+  "license_or_access_note": "Replace with the applicable authorization/license statement.",
+  "raw_data_owner": "Replace with authorized data owner"
+}
