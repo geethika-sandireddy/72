@@ -1,5 +1,6 @@
 """API serving with strict provenance, real source health, spatial fields and state persistence."""
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import time, numpy as np
 from app.config import WarningContext, SensorHealth
 from app.contracts import NowcastRequest
@@ -11,6 +12,7 @@ from app.spatial import lightning_density, normalize_grid, probability_fields
 from app.temporal import CaseStateStore
 
 app=FastAPI(title="INDRA — India Thunderstorm & Lightning Nowcast",version="1.1-prototype")
+app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_methods=["*"],allow_headers=["*"])
 MODEL=calibrated_demo_model(); CASES=CaseStateStore()
 
 def _validate(req):
