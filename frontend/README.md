@@ -1,14 +1,30 @@
-# INDRA Frontend
+# INDRA frontend (Next.js)
 
-This directory contains the new premium operations-console frontend. It is a static frontend so it can be opened immediately without a Node toolchain:
+This replaced the earlier static HTML/CSS/JS dashboard. It is a real
+Next.js 16 + React 19 + Tailwind app — it does **not** run by opening a
+file in a browser. You need a dev server.
+
+## Run it
 
 ```bash
 cd frontend
-python -m http.server 3000
+npm install      # or pnpm install, if you have pnpm
+npm run dev
 ```
 
-Open http://localhost:3000.
+Then open http://localhost:3000
 
-The interface is intentionally original and does not copy the reference repository. It is a high-fidelity operational shell for the existing FastAPI/Streamlit prototype. The visible default state is explicitly `SYNTHETIC DEMO`; no values are presented as live observations.
+## Build for production
 
-The next integration step is wiring `frontend/app.js` to `POST /forecast` and mapping real `GridObservation.meta` bounds into the map layer. Until that is connected, this page is a deterministic presentation/demo surface, not a live weather product.
+```bash
+npm run build
+npm run start
+```
+
+## Status
+
+`lib/indra-data.ts` currently ships fixed SYNTHETIC demo data (storm
+cells, source health, benchmark numbers) — it does not yet call the
+FastAPI backend in `app/service.py`. Wiring it to `POST /forecast` is
+the same kind of integration that was done for the old static
+dashboard and is the next step before this can show live data.

@@ -1,2 +1,14 @@
 # External datasets are downloaded locally, never committed by default.
 data/external/
+
+# Frontend (Next.js) build artifacts — never commit these.
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+frontend/*.tsbuildinfo
+frontend/package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+
