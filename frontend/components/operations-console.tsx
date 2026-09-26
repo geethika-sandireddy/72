@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Activity, Cloud, Radar, Waypoints, Zap, TriangleAlert, ArrowUpRight } from 'lucide-react'
+import { Activity, Cloud, Radar, Waypoints, Zap, TriangleAlert, ArrowUpRight, Satellite, Loader2 } from 'lucide-react'
 import { IndiaMap, type MapLayer } from '@/components/india-map'
 import { TemporalOutlook } from '@/components/temporal-outlook'
 import { SectionHeading } from '@/components/section-heading'
@@ -12,6 +12,7 @@ import {
   severityLabel,
   type Horizon,
 } from '@/lib/indra-data'
+import { postForecast, type ForecastResponse } from '@/lib/api'
 import type { StatePath } from '@/lib/india-geo'
 
 const LAYERS: { key: MapLayer; label: string; icon: typeof Radar }[] = [
@@ -29,9 +30,21 @@ export function OperationsConsole({ statePaths }: { statePaths: StatePath[] }) {
   const [selectedId, setSelectedId] = useState('C-1055')
   const [horizon, setHorizon] = useState<Horizon>(30)
   const [layer, setLayer] = useState<MapLayer>('risk')
+  const [liveResult, setLiveResult] = useState<ForecastResponse | null>(null)
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [liveError, setLiveError] = useState(false)
 
   const cell = useMemo(() => CELLS.find((c) => c.id === selectedId)!, [selectedId])
   const color = severityColor[cell.severity]
+
+  async function runLiveForecast() {
+    setLiveLoading(true)
+    setLiveError(false)
+    const result = await postForecast({ district: cell.city, state: cell.state, caseId: cell.id })
+    setLiveLoading(false)
+    if (result) setLiveResult(result)
+    else setLiveError(true)
+  }
 
   return (
     <section id="console" className="relative mx-auto max-w-7xl px-5 py-24 sm:px-8">
@@ -84,11 +97,66 @@ export function OperationsConsole({ statePaths }: { statePaths: StatePath[] }) {
           })}
         </div>
 
+        <button
+          onClick={runLiveForecast}
+          disabled={liveLoading}
+          className="flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-primary transition hover:bg-primary/20 disabled:opacity-60"
+        >
+          {liveLoading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Satellite className="h-3.5 w-3.5" />
+          )}
+          <span className="eyebrow !text-primary">Ping live backend</span>
+        </button>
+
         <div className="ml-auto flex items-center gap-2 rounded-full border border-storm/40 bg-storm/10 px-3 py-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-storm animate-pulse-soft" />
           <span className="eyebrow !text-storm">Synthetic replay</span>
         </div>
       </div>
+
+      {(liveResult || liveError) && (
+        <div
+          className={`mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border px-4 py-3 ${
+            liveError ? 'border-destructive/40 bg-destructive/5' : 'border-nominal/40 bg-nominal/5'
+          }`}
+        >
+          {liveError ? (
+            <p className="text-xs text-muted-foreground">
+              Couldn&apos;t reach the FastAPI backend at{' '}
+              <code className="text-foreground">{process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}</code>.
+              Run <code className="text-foreground">uvicorn app.service:app --reload</code> and try again.
+            </p>
+          ) : liveResult ? (
+            <>
+              <span className="eyebrow !text-nominal">Live backend response</span>
+              <span className="tnum text-xs text-muted-foreground">
+                latency <span className="text-foreground">{liveResult.latency_ms} ms</span>
+              </span>
+              <span className="tnum text-xs text-muted-foreground">
+                case <span className="text-foreground">{liveResult.case_id}</span>
+              </span>
+              {liveResult.forecast[String(horizon)] && (
+                <>
+                  <span className="tnum text-xs text-muted-foreground">
+                    P(flash) lead {fmtHorizon(horizon)}{' '}
+                    <span className="text-foreground">
+                      {(liveResult.forecast[String(horizon)].lightning_probability * 100).toFixed(1)}%
+                    </span>
+                  </span>
+                  <span className="tnum text-xs text-muted-foreground">
+                    sensor agreement{' '}
+                    <span className="text-foreground">
+                      {(liveResult.forecast[String(horizon)].sensor_agreement * 100).toFixed(0)}%
+                    </span>
+                  </span>
+                </>
+              )}
+            </>
+          ) : null}
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
         {/* map */}

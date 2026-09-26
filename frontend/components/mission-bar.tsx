@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { getBackendHealth } from '@/lib/api'
 
 const NAV = [
   { label: 'Console', href: '#console' },
@@ -32,6 +33,7 @@ export function IndraMark({ className = 'h-7 w-7' }: { className?: string }) {
 
 export function MissionBar() {
   const [now, setNow] = useState<string>('')
+  const [backendUp, setBackendUp] = useState<boolean | null>(null)
 
   useEffect(() => {
     const tick = () => {
@@ -48,6 +50,20 @@ export function MissionBar() {
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      const health = await getBackendHealth()
+      if (!cancelled) setBackendUp(!!health)
+    }
+    check()
+    const id = setInterval(check, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   return (
@@ -74,6 +90,27 @@ export function MissionBar() {
           <div className="hidden items-center gap-2 rounded-full border border-hairline bg-background/70 px-3 py-1.5 backdrop-blur-md sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-nominal animate-pulse-soft" />
             <span className="tnum text-xs text-muted-foreground">{now || '--:--:--'} UTC</span>
+          </div>
+          <div
+            className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md sm:flex ${
+              backendUp
+                ? 'border-nominal/30 bg-nominal/10'
+                : 'border-hairline bg-background/70'
+            }`}
+            title={backendUp ? 'FastAPI backend reachable' : 'Backend unreachable — showing synthetic data'}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                backendUp === null
+                  ? 'bg-muted-foreground'
+                  : backendUp
+                    ? 'bg-nominal animate-pulse-soft'
+                    : 'bg-destructive'
+              }`}
+            />
+            <span className="eyebrow">
+              {backendUp === null ? 'CHECKING BACKEND' : backendUp ? 'BACKEND LIVE' : 'BACKEND OFFLINE'}
+            </span>
           </div>
           <div className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5">
             <span className="eyebrow !text-primary">NTRO · PS 26072</span>

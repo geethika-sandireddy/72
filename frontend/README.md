@@ -21,10 +21,22 @@ npm run build
 npm run start
 ```
 
-## Status
+## Connecting to the backend
 
-`lib/indra-data.ts` currently ships fixed SYNTHETIC demo data (storm
-cells, source health, benchmark numbers) — it does not yet call the
-FastAPI backend in `app/service.py`. Wiring it to `POST /forecast` is
-the same kind of integration that was done for the old static
-dashboard and is the next step before this can show live data.
+The dashboard's hero content, storm cells and KPIs (`lib/indra-data.ts`)
+are still fixed, labelled SYNTHETIC demo data — that's intentional, so
+the console always looks right even with no backend running.
+
+On top of that, the app now also talks to the real FastAPI backend
+(`app/service.py`):
+
+1. Start the backend: `uvicorn app.service:app --reload` (from the repo root).
+2. Start the frontend: `cd frontend && npm run dev`.
+3. The top bar shows a **BACKEND LIVE** / **BACKEND OFFLINE** pill (polls
+   `GET /health` every 15s).
+4. In the operations console, click **Ping live backend** to send a real
+   `POST /forecast` for the selected cell and see the actual latency and
+   model output returned by the backend.
+
+If your backend runs somewhere other than `http://localhost:8000`, copy
+`.env.example` to `.env.local` and set `NEXT_PUBLIC_API_BASE_URL`.
